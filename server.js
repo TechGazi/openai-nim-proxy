@@ -11,11 +11,14 @@ app.use(express.json());
 const NIM_API_BASE = 'https://integrate.api.nvidia.com/v1';
 const NIM_API_KEY = process.env.NIM_API_KEY;
 
+// Set to true to show <think> reasoning blocks
+const SHOW_REASONING = true;
+
 const MODEL_MAPPING = {
   'gpt-3.5-turbo': 'meta/llama-3.1-8b-instruct',
   'gpt-4':         'meta/llama-3.1-70b-instruct',
   'gpt-4-turbo':   'meta/llama-3.1-405b-instruct',
-  'gpt-4o':        'deepseek-ai/deepseek-v3-0324',
+  'gpt-4o':        'deepseek-ai/deepseek-r1-0528',
   'claude-3-opus': 'nvidia/llama-3.1-nemotron-ultra-253b-v1',
   'claude-3-sonnet':'mistralai/mistral-large-2-instruct',
   'gemini-pro':    'qwen/qwen3-235b-a22b-instruct',
@@ -24,7 +27,7 @@ const MODEL_MAPPING = {
 };
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'OpenAI to NIM Proxy' });
+  res.json({ status: 'ok', service: 'OpenAI to NIM Proxy', reasoning: SHOW_REASONING });
 });
 
 app.get('/v1/models', (req, res) => {
@@ -70,6 +73,8 @@ app.post('/v1/chat/completions', async (req, res) => {
       res.setHeader('Connection', 'keep-alive');
 
       let buffer = '';
+      let reasoningBuffer = '';
+      let reasoningSent = false;
 
       response.data.on('data', (chunk) => {
         buffer += chunk.toString();
@@ -89,12 +94,37 @@ app.post('/v1/chat/completions', async (req, res) => {
             const delta = data.choices?.[0]?.delta;
 
             if (delta) {
-              // Strip reasoning_content, only pass real content
+              const reasoning = delta.reasoning_content;
               const content = delta.content;
+
               delete delta.reasoning_content;
 
-              if (content !== undefined) {
-                delta.content = content;
+              if (SHOW_REASONING) {
+                if (reasoning) {
+                  // Accumulate reasoning and wrap in <think> tags
+                  if (!reasoningSent && reasoningBuffer === '') {
+                    // First reasoning chunk — open the tag
+                    delta.content = '<think>\n' + reasoning;
+                  } else {
+                    delta.content = reasoning;
+                  }
+                  reasoningBuffer += reasoning;
+                } else if (content) {
+                  if (reasoningBuffer && !reasoningSent) {
+                    // First content chunk after reasoning — close the tag
+                    delta.content = '\n</think>\n\n' + content;
+                    reasoningSent = true;
+                  } else {
+                    delta.content = content;
+                  }
+                } else {
+                  delta.content = '';
+                }
+              } else {
+                // Reasoning hidden — only pass real content
+                if (content !== undefined) {
+                  delta.content = content;
+                }
               }
             }
 
@@ -110,6 +140,12 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     } else {
       const choice = response.data.choices[0];
+      let content = choice.message.content || '';
+
+      if (SHOW_REASONING && choice.message.reasoning_content) {
+        content = '<think>\n' + choice.message.reasoning_content + '\n</think>\n\n' + content;
+      }
+
       res.json({
         id: `chatcmpl-${Date.now()}`,
         object: 'chat.completion',
@@ -119,7 +155,7 @@ app.post('/v1/chat/completions', async (req, res) => {
           index: 0,
           message: {
             role: choice.message.role,
-            content: choice.message.content || ''
+            content: content
           },
           finish_reason: choice.finish_reason
         }],
@@ -145,4 +181,5 @@ app.all('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`NIM Proxy running on port ${PORT}`);
+  console.log(`Reasoning display: ${SHOW_REASONING ? 'ON' : 'OFF'}`);
 });

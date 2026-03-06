@@ -76,7 +76,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       temperature: temperature || 0.7,
       max_tokens: max_tokens || 4096,
       stream: stream || false,
-      ...(useThinking && { extra_body: { thinking: { type: 'enabled' } } })
+      ...(useThinking && { extra_body: { chat_template_kwargs: { thinking: true } } })
     };
 
     const response = await axios.post(

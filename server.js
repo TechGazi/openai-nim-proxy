@@ -13,24 +13,20 @@ const NIM_API_KEY = process.env.NIM_API_KEY;
 
 const SHOW_REASONING = true;
 
-// Models that support thinking mode
 const THINKING_MODELS = ['z-ai/glm5', 'z-ai/glm4.7'];
-
-// Models that need a formatting nudge
 const FORMAT_FIX_MODELS = ['z-ai/glm5', 'z-ai/glm4.7'];
-
-const FORMAT_SYSTEM_INJECT = '\n\nIMPORTANT FORMATTING: Always use proper paragraph breaks (double newline) between paragraphs. Never write walls of text. Separate dialogue, actions, and descriptions into clearly spaced paragraphs.';
+const FORMAT_INJECT = '\n\nIMPORTANT: Always use double newlines between paragraphs. Never write walls of text. Separate dialogue, actions, and descriptions into clearly spaced paragraphs.';
 
 const MODEL_MAPPING = {
-  'gpt-3.5-turbo': 'meta/llama-3.1-8b-instruct',
-  'gpt-4':         'meta/llama-3.1-70b-instruct',
-  'gpt-4-turbo':   'meta/llama-3.1-405b-instruct',
-  'gpt-4o':        'deepseek-ai/deepseek-v3.1',
-  'claude-3-opus': 'nvidia/llama-3.1-nemotron-ultra-253b-v1',
+  'gpt-3.5-turbo':  'meta/llama-3.1-8b-instruct',
+  'gpt-4':          'meta/llama-3.1-70b-instruct',
+  'gpt-4-turbo':    'meta/llama-3.1-405b-instruct',
+  'gpt-4o':         'deepseek-ai/deepseek-v3.1',
+  'claude-3-opus':  'nvidia/llama-3.1-nemotron-ultra-253b-v1',
   'claude-3-sonnet':'mistralai/mistral-large-2-instruct',
-  'gemini-pro':    'qwen/qwen3-235b-a22b-instruct',
-  'glm-5':         'z-ai/glm5',
-  'glm-4':         'z-ai/glm4.7'
+  'gemini-pro':     'qwen/qwen3-235b-a22b-instruct',
+  'glm-5':          'z-ai/glm5',
+  'glm-4':          'z-ai/glm4.7'
 };
 
 app.get('/health', (req, res) => {
@@ -39,10 +35,7 @@ app.get('/health', (req, res) => {
 
 app.get('/v1/models', (req, res) => {
   const models = Object.keys(MODEL_MAPPING).map(id => ({
-    id,
-    object: 'model',
-    created: Date.now(),
-    owned_by: 'nvidia-nim-proxy'
+    id, object: 'model', created: Date.now(), owned_by: 'nvidia-nim-proxy'
   }));
   res.json({ object: 'list', data: models });
 });
@@ -50,25 +43,21 @@ app.get('/v1/models', (req, res) => {
 app.post('/v1/chat/completions', async (req, res) => {
   try {
     const { model, messages, temperature, max_tokens, stream } = req.body;
-
     const nimModel = MODEL_MAPPING[model] || 'meta/llama-3.1-70b-instruct';
 
-    // Inject formatting prompt for GLM models
+    // Inject formatting instruction for GLM models
     let finalMessages = [...messages];
     if (FORMAT_FIX_MODELS.includes(nimModel)) {
       const sysIndex = finalMessages.findIndex(m => m.role === 'system');
       if (sysIndex >= 0) {
         finalMessages[sysIndex] = {
           ...finalMessages[sysIndex],
-          content: finalMessages[sysIndex].content + FORMAT_SYSTEM_INJECT
+          content: finalMessages[sysIndex].content + FORMAT_INJECT
         };
       } else {
-        finalMessages.unshift({ role: 'system', content: FORMAT_SYSTEM_INJECT.trim() });
+        finalMessages.unshift({ role: 'system', content: FORMAT_INJECT.trim() });
       }
     }
-
-    // Enable thinking for supported models
-    const useThinking = THINKING_MODELS.includes(nimModel);
 
     const nimRequest = {
       model: nimModel,
@@ -76,7 +65,15 @@ app.post('/v1/chat/completions', async (req, res) => {
       temperature: temperature || 0.7,
       max_tokens: max_tokens || 4096,
       stream: stream || false,
-      ...(useThinking && { extra_body: { chat_template_kwargs: { thinking: true } } })
+      // Correct GLM-5 thinking parameter
+      ...(THINKING_MODELS.includes(nimModel) && {
+        extra_body: {
+          chat_template_kwargs: {
+            enable_thinking: true,
+            clear_thinking: false
+          }
+        }
+      })
     };
 
     const response = await axios.post(
@@ -108,7 +105,6 @@ app.post('/v1/chat/completions', async (req, res) => {
 
         lines.forEach(line => {
           if (!line.startsWith('data: ')) return;
-
           if (line.includes('[DONE]')) {
             res.write('data: [DONE]\n\n');
             return;
@@ -125,7 +121,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 
               if (SHOW_REASONING) {
                 if (reasoning) {
-                  if (!reasoningSent && reasoningBuffer === '') {
+                  if (reasoningBuffer === '') {
                     delta.content = '<think>\n' + reasoning;
                   } else {
                     delta.content = reasoning;
@@ -142,16 +138,12 @@ app.post('/v1/chat/completions', async (req, res) => {
                   delta.content = '';
                 }
               } else {
-                if (content !== undefined) {
-                  delta.content = content;
-                }
+                if (content !== undefined) delta.content = content;
               }
             }
 
             res.write(`data: ${JSON.stringify(data)}\n\n`);
-          } catch (e) {
-            // skip malformed chunks
-          }
+          } catch (e) { /* skip malformed chunks */ }
         });
       });
 
@@ -198,5 +190,5 @@ app.all('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`NIM Proxy running on port ${PORT}`);
-  console.log(`Reasoning display: ${SHOW_REASONING ? 'ON' : 'OFF'}`);
+  console.log(`Reasoning: ${SHOW_REASONING ? 'ON' : 'OFF'}`);
 });

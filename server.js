@@ -11,14 +11,21 @@ app.use(express.json());
 const NIM_API_BASE = 'https://integrate.api.nvidia.com/v1';
 const NIM_API_KEY = process.env.NIM_API_KEY;
 
-// Set to true to show <think> reasoning blocks
 const SHOW_REASONING = true;
+
+// Models that support thinking mode
+const THINKING_MODELS = ['z-ai/glm5', 'z-ai/glm4.7'];
+
+// Models that need a formatting nudge
+const FORMAT_FIX_MODELS = ['z-ai/glm5', 'z-ai/glm4.7'];
+
+const FORMAT_SYSTEM_INJECT = '\n\nIMPORTANT FORMATTING: Always use proper paragraph breaks (double newline) between paragraphs. Never write walls of text. Separate dialogue, actions, and descriptions into clearly spaced paragraphs.';
 
 const MODEL_MAPPING = {
   'gpt-3.5-turbo': 'meta/llama-3.1-8b-instruct',
   'gpt-4':         'meta/llama-3.1-70b-instruct',
   'gpt-4-turbo':   'meta/llama-3.1-405b-instruct',
-  'gpt-4o': 'deepseek-ai/deepseek-v3.1',
+  'gpt-4o':        'deepseek-ai/deepseek-v3.1',
   'claude-3-opus': 'nvidia/llama-3.1-nemotron-ultra-253b-v1',
   'claude-3-sonnet':'mistralai/mistral-large-2-instruct',
   'gemini-pro':    'qwen/qwen3-235b-a22b-instruct',
@@ -46,12 +53,30 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     const nimModel = MODEL_MAPPING[model] || 'meta/llama-3.1-70b-instruct';
 
+    // Inject formatting prompt for GLM models
+    let finalMessages = [...messages];
+    if (FORMAT_FIX_MODELS.includes(nimModel)) {
+      const sysIndex = finalMessages.findIndex(m => m.role === 'system');
+      if (sysIndex >= 0) {
+        finalMessages[sysIndex] = {
+          ...finalMessages[sysIndex],
+          content: finalMessages[sysIndex].content + FORMAT_SYSTEM_INJECT
+        };
+      } else {
+        finalMessages.unshift({ role: 'system', content: FORMAT_SYSTEM_INJECT.trim() });
+      }
+    }
+
+    // Enable thinking for supported models
+    const useThinking = THINKING_MODELS.includes(nimModel);
+
     const nimRequest = {
       model: nimModel,
-      messages: messages,
+      messages: finalMessages,
       temperature: temperature || 0.7,
       max_tokens: max_tokens || 4096,
-      stream: stream || false
+      stream: stream || false,
+      ...(useThinking && { extra_body: { thinking: { type: 'enabled' } } })
     };
 
     const response = await axios.post(
@@ -96,14 +121,11 @@ app.post('/v1/chat/completions', async (req, res) => {
             if (delta) {
               const reasoning = delta.reasoning_content;
               const content = delta.content;
-
               delete delta.reasoning_content;
 
               if (SHOW_REASONING) {
                 if (reasoning) {
-                  // Accumulate reasoning and wrap in <think> tags
                   if (!reasoningSent && reasoningBuffer === '') {
-                    // First reasoning chunk — open the tag
                     delta.content = '<think>\n' + reasoning;
                   } else {
                     delta.content = reasoning;
@@ -111,7 +133,6 @@ app.post('/v1/chat/completions', async (req, res) => {
                   reasoningBuffer += reasoning;
                 } else if (content) {
                   if (reasoningBuffer && !reasoningSent) {
-                    // First content chunk after reasoning — close the tag
                     delta.content = '\n</think>\n\n' + content;
                     reasoningSent = true;
                   } else {
@@ -121,7 +142,6 @@ app.post('/v1/chat/completions', async (req, res) => {
                   delta.content = '';
                 }
               } else {
-                // Reasoning hidden — only pass real content
                 if (content !== undefined) {
                   delta.content = content;
                 }
@@ -153,10 +173,7 @@ app.post('/v1/chat/completions', async (req, res) => {
         model: model,
         choices: [{
           index: 0,
-          message: {
-            role: choice.message.role,
-            content: content
-          },
+          message: { role: choice.message.role, content },
           finish_reason: choice.finish_reason
         }],
         usage: response.data.usage || {}

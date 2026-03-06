@@ -18,7 +18,7 @@ const MODEL_MAPPING = {
   'gpt-3.5-turbo': 'meta/llama-3.1-8b-instruct',
   'gpt-4':         'meta/llama-3.1-70b-instruct',
   'gpt-4-turbo':   'meta/llama-3.1-405b-instruct',
-  'gpt-4o':        'deepseek-ai/deepseek-v3-0324',
+  'gpt-4o': 'deepseek-ai/deepseek-v3.1',
   'claude-3-opus': 'nvidia/llama-3.1-nemotron-ultra-253b-v1',
   'claude-3-sonnet':'mistralai/mistral-large-2-instruct',
   'gemini-pro':    'qwen/qwen3-235b-a22b-instruct',
